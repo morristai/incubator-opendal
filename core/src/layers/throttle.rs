@@ -32,6 +32,7 @@ use governor::{NegativeMultiDecision, NotUntil, Quota, RateLimiter, RatelimitedS
 
 use crate::raw::*;
 use crate::*;
+use crate::raw::oio::Streamer;
 
 /// Add a bandwidth rate limiter to the underlying services.
 ///
@@ -242,6 +243,10 @@ impl<R: oio::Write> oio::Write for ThrottleWrapper<R> {
             },
         }
         return Ok(());
+    }
+
+    async fn sink(&mut self, size: u64, s: Streamer) -> Result<()> {
+        self.inner.sink(size, s).await
     }
 
     async fn abort(&mut self) -> Result<()> {
