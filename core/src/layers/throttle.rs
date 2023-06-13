@@ -19,6 +19,7 @@ use std::io::SeekFrom;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::thread;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -220,12 +221,12 @@ impl<R: oio::BlockingRead> oio::BlockingRead for ThrottleWrapper<R> {
 
 #[async_trait]
 impl<R: oio::Write> oio::Write for ThrottleWrapper<R> {
-    async fn write(&mut self, mut bs: Bytes) -> Result<()> {
-        let mut buf_length = NonZeroU32::new(bs.len() as u32).unwrap();
+    async fn write(&mut self, bs: Bytes) -> Result<()> {
+        let buf_length = NonZeroU32::new(bs.len() as u32).unwrap();
 
         loop {
             match self.limiter.check_n(buf_length) {
-                Ok(_) => self.inner.write(bs.split_to(buf_length as usize)).await?,
+                Ok(_) => return self.inner.write(bs).await,
                 Err(negative) => match negative {
                     // the query is valid but the Decider can not accommodate them.
                     NegativeMultiDecision::BatchNonConforming(_, not_until) => {
@@ -237,8 +238,7 @@ impl<R: oio::Write> oio::Write for ThrottleWrapper<R> {
                     NegativeMultiDecision::InsufficientCapacity(_) => return Err(Error::new(
                         ErrorKind::RateLimited,
                         "InsufficientCapacity duo to max_burst_byte smaller than the request size",
-                    )
-                    .into()),
+                    )),
                 },
             }
         }
@@ -258,25 +258,24 @@ impl<R: oio::Write> oio::Write for ThrottleWrapper<R> {
 }
 
 impl<R: oio::BlockingWrite> oio::BlockingWrite for ThrottleWrapper<R> {
-    fn write(&mut self, mut bs: Bytes) -> Result<()> {
-        let mut buf_length = NonZeroU32::new(bs.len() as u32).unwrap();
+    fn write(&mut self, bs: Bytes) -> Result<()> {
+        let buf_length = NonZeroU32::new(bs.len() as u32).unwrap();
 
         loop {
             match self.limiter.check_n(buf_length) {
-                Ok(_) => self.inner.write(bs.split_to(buf_length as usize))?,
+                Ok(_) => return self.inner.write(bs),
                 Err(negative) => match negative {
                     // the query is valid but the Decider can not accommodate them.
                     NegativeMultiDecision::BatchNonConforming(_, not_until) => {
                         let wait_time = not_until.wait_time_from(DefaultClock::default().now());
                         // TODO: Should lock the limiter and wait for the wait_time, or should let other small requests go first?
-                        tokio::time::sleep(wait_time)
+                        thread::sleep(wait_time);
                     }
                     // the query was invalid as the rate limit parameters can "never" accommodate the number of cells queried for.
-                    NegativeMultiDecision::InsufficientCapacity(_) => Err(Error::new(
+                    NegativeMultiDecision::InsufficientCapacity(_) => return Err(Error::new(
                         ErrorKind::RateLimited,
                         "InsufficientCapacity duo to max_burst_byte smaller than the request size",
-                    )
-                    .into()),
+                    )),
                 },
             }
         }
@@ -289,12 +288,12 @@ impl<R: oio::BlockingWrite> oio::BlockingWrite for ThrottleWrapper<R> {
 
 #[async_trait]
 impl<R: oio::Append> oio::Append for ThrottleWrapper<R> {
-    async fn append(&mut self, mut bs: Bytes) -> Result<()> {
-        let mut buf_length = NonZeroU32::new(bs.len() as u32).unwrap();
+    async fn append(&mut self, bs: Bytes) -> Result<()> {
+        let buf_length = NonZeroU32::new(bs.len() as u32).unwrap();
 
         loop {
             match self.limiter.check_n(buf_length) {
-                Ok(_) => self.inner.append(bs.split_to(buf_length as usize)).await?,
+                Ok(_) => return self.inner.append(bs).await,
                 Err(negative) => match negative {
                     // the query is valid but the Decider can not accommodate them.
                     NegativeMultiDecision::BatchNonConforming(_, not_until) => {
@@ -306,8 +305,7 @@ impl<R: oio::Append> oio::Append for ThrottleWrapper<R> {
                     NegativeMultiDecision::InsufficientCapacity(_) => return Err(Error::new(
                         ErrorKind::RateLimited,
                         "InsufficientCapacity duo to max_burst_byte smaller than the request size",
-                    )
-                    .into()),
+                    )),
                 },
             }
         }
